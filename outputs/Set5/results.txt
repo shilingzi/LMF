@@ -1,0 +1,10 @@
+模型: save/edsr-b_lm-lmlte/epoch-best.pth
+测试数据集: Set5
+放大倍数: 4x
+平均PSNR: 28.64 dB
+
+baby.png: PSNR = 31.55 dB
+bird.png: PSNR = 30.34 dB
+butterfly.png: PSNR = 24.09 dB
+head.png: PSNR = 29.64 dB
+woman.png: PSNR = 27.60 dB
