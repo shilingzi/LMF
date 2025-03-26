@@ -1,15 +1,35 @@
 import os
 import argparse
-import subprocess
 import time
 import yaml
-import sys
 from datetime import datetime
+import re
+import importlib.util
+import sys
+
+def load_module_from_file(file_path, module_name):
+    """从文件加载模块"""
+    spec = importlib.util.spec_from_file_location(module_name, file_path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
 
 def run_evaluation(model_path, config_path, data_dir, scale=4, debug=False):
     """运行单个评估任务"""
-    command = [
-        sys.executable, "eval_simple.py",
+    print(f"评估数据集: {os.path.basename(data_dir)}")
+    print(f"模型路径: {model_path}")
+    print(f"配置文件: {config_path}")
+    
+    # 加载eval_simple模块
+    eval_module = load_module_from_file("eval_simple.py", "eval_simple")
+    
+    # 直接在当前进程中运行评估
+    start_time = time.time()
+    
+    # 设置命令行参数
+    sys.argv = [
+        "eval_simple.py",
         "--model_path", model_path,
         "--config_path", config_path,
         "--data_dir", data_dir,
@@ -17,34 +37,40 @@ def run_evaluation(model_path, config_path, data_dir, scale=4, debug=False):
     ]
     
     if debug:
-        command.append("--debug")
+        sys.argv.append("--debug")
     
-    print(f"执行命令: {' '.join(command)}")
+    # 捕获输出
+    import io
+    from contextlib import redirect_stdout
     
-    try:
-        start_time = time.time()
-        # 设置encoding='utf-8'解决中文编码问题
-        result = subprocess.run(command, capture_output=True, text=True, check=True, encoding='utf-8')
-        end_time = time.time()
-        
-        # 从输出中提取PSNR值
-        output = result.stdout
-        psnr_line = [line for line in output.split('\n') if "平均 PSNR =" in line]
-        
-        if psnr_line:
-            psnr = float(psnr_line[0].split("=")[-1].strip().split()[0])
-            dataset_name = os.path.basename(data_dir)
-            print(f"数据集 {dataset_name} 评估完成，PSNR: {psnr:.2f} dB，耗时: {end_time - start_time:.2f}秒")
-            return dataset_name, psnr, output
-        else:
-            print(f"警告: 在输出中未找到PSNR值")
-            return os.path.basename(data_dir), 0.0, output
+    f = io.StringIO()
+    with redirect_stdout(f):
+        try:
+            # 运行评估
+            if hasattr(eval_module, 'main'):
+                eval_module.main()
+            else:
+                print("评估模块中没有main函数")
+                return os.path.basename(data_dir), 0.0, "评估模块中没有main函数"
+        except Exception as e:
+            error_msg = f"评估过程中出错: {str(e)}"
+            print(error_msg)
+            return os.path.basename(data_dir), 0.0, error_msg
     
-    except subprocess.CalledProcessError as e:
-        print(f"评估失败: {e}")
-        print(f"标准输出: {e.stdout if e.stdout else '无输出'}")
-        print(f"标准错误: {e.stderr if e.stderr else '无错误'}")
-        return os.path.basename(data_dir), 0.0, (e.stdout or "") + "\n" + (e.stderr or "")
+    output = f.getvalue()
+    end_time = time.time()
+    
+    # 从输出中提取PSNR值
+    psnr_match = re.search(r"平均\s*PSNR\s*=\s*([\d.]+)", output)
+    
+    if psnr_match:
+        psnr = float(psnr_match.group(1))
+        dataset_name = os.path.basename(data_dir)
+        print(f"数据集 {dataset_name} 评估完成，PSNR: {psnr:.2f} dB，耗时: {end_time - start_time:.2f}秒")
+        return dataset_name, psnr, output
+    else:
+        print(f"警告: 在输出中未找到PSNR值")
+        return os.path.basename(data_dir), 0.0, output
 
 def main():
     parser = argparse.ArgumentParser(description="批量评估超分辨率模型")
