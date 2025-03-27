@@ -52,21 +52,33 @@ class LMLTE(nn.Module):
                 self.mod_coef_dim = self.mod_freq_dim = imnet_spec['args']['hidden_dim']
                 hypernet_out_dim += self.mod_coef_dim + self.mod_freq_dim
 
-            self.hypernet = models.make(hypernet_spec, args={'in_dim': hypernet_in_dim, 'out_dim': hypernet_out_dim})
+            hypernet_args = hypernet_spec.get('args', {})
+            hypernet_args.update({'in_dim': hypernet_in_dim, 'out_dim': hypernet_out_dim})
+            self.hypernet = models.make(hypernet_spec['name'], **hypernet_args)
         else:
             self.hypernet = None
             
-        self.imnet_q = models.make(imnet_q, args={'in_dim': self.encoder.out_dim, 'out_dim': self.encoder.out_dim})
-        self.imnet_k = models.make(imnet_k, args={'in_dim': self.encoder.out_dim+2, 'out_dim': self.encoder.out_dim})
-        self.imnet_v = models.make(imnet_v, args={'in_dim': 2*self.encoder.out_dim, 'out_dim': 2*self.encoder.out_dim})
-
+        imnet_q_args = imnet_q.get('args', {})
+        imnet_q_args.update({'in_dim': self.encoder.out_dim, 'out_dim': self.encoder.out_dim})
+        self.imnet_q = models.make(imnet_q['name'], **imnet_q_args)
+        
+        imnet_k_args = imnet_k.get('args', {})
+        imnet_k_args.update({'in_dim': self.encoder.out_dim+2, 'out_dim': self.encoder.out_dim})
+        self.imnet_k = models.make(imnet_k['name'], **imnet_k_args)
+        
+        imnet_v_args = imnet_v.get('args', {})
+        imnet_v_args.update({'in_dim': 2*self.encoder.out_dim, 'out_dim': 2*self.encoder.out_dim})
+        self.imnet_v = models.make(imnet_v['name'], **imnet_v_args)
 
         # Render MLP
         if imnet_spec is not None:
             if self.mod_input:
                 self.imphase = nn.Linear(2, imnet_spec['args']['hidden_dim'] // 2, bias=False)
             imnet_in_dim = imnet_spec['args']['hidden_dim'] if self.mod_input else hidden_dim
-            self.imnet = models.make(imnet_spec, args={'in_dim': imnet_in_dim, 'mod_up_merge': False})
+            
+            imnet_args = imnet_spec.get('args', {})
+            imnet_args.update({'in_dim': imnet_in_dim, 'mod_up_merge': False})
+            self.imnet = models.make(imnet_spec['name'], **imnet_args)
         else:
             self.imnet = None
 

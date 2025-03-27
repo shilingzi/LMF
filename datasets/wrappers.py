@@ -8,25 +8,23 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 
-from datasets import register
+from datasets.datasets import register
 from utils import to_pixel_samples
 from utils import make_coord
 
 
-# 添加wrapper字典和make函数
-wrappers = {}
+# 删除重复定义的包装器字典和函数
+# wrappers = {}
 
+# def register(name):
+#    def decorator(cls):
+#        wrappers[name] = cls
+#        return cls
+#    return decorator
 
-def register(name):
-    def decorator(cls):
-        wrappers[name] = cls
-        return cls
-    return decorator
-
-
-def make(spec, dataset):
-    wrapper_args = copy.deepcopy(spec['args'])
-    return wrappers[spec['name']](dataset, **wrapper_args)
+# def make(spec, dataset):
+#    wrapper_args = copy.deepcopy(spec['args'])
+#    return wrappers[spec['name']](dataset, **wrapper_args)
 
 
 @register('sr-implicit-paired')
@@ -370,7 +368,7 @@ class SRImplicitUniformVaried(Dataset):
 
 
 @register('sr-implicit-fixed-resolution')
-class SRImplicitDownsampled(Dataset):
+class SRImplicitFixedResolution(Dataset):
 
     def __init__(self, dataset, inp_res, out_res):
         self.dataset = dataset

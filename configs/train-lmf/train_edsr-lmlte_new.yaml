@@ -35,10 +35,10 @@ data_norm:
   gt: {sub: [0.5], div: [0.5]}
 
 model:
-  name: lmlte
+  name: lmlte-edsr
   args:
     encoder_spec:
-      name: swinir
+      name: edsr-baseline
       args:
         no_upsampling: true
     imnet_spec:
@@ -84,6 +84,6 @@ multi_step_lr:
   gamma: 0.5
 
 epoch_val: 1
-epoch_save: 10
+epoch_save: 50
 
 resume: null 

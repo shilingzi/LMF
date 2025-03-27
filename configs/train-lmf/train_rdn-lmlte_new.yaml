@@ -1,0 +1,69 @@
+train_dataset:
+  name: image-multi-folder
+  args:
+    root_path: ./data/lmlte_data/train
+    repeat: 1
+    cache: in_memory
+  batch_size: 16
+  patch_size: 48
+  sample_q: 2304
+  input_size:
+    - 48
+    - 48
+  scale: 2
+  downsample: bicubic
+  augment: true
+  scale_max: 8
+  scale_min: 0.5
+
+val_dataset:
+  name: image-multi-folder
+  args:
+    root_path: ./data/lmlte_data/val
+    first_k: 10
+    repeat: 1
+    cache: in_memory
+  batch_size: 4
+  patch_size: 48
+  sample_q: 2304
+  input_size:
+    - 48
+    - 48
+  scale: 2
+  downsample: bicubic
+  scale_max: 8
+  scale_min: 0.5
+
+model:
+  name: lmlte_rdn
+  args:
+    scale: 2
+    G0: 64
+    D: 16
+    C: 8
+    growth_chan: 64
+    local_mode: LRLTE
+
+optimizer:
+  name: adam
+  args:
+    lr: 1.e-4
+    weight_decay: 0
+    
+multi_step_lr:
+  milestones: [200, 400, 600, 800]
+  gamma: 0.5
+
+epoch_max: 1000
+epoch_save: 50
+epoch_val: 5
+
+data_norm:
+  inp:
+    sub: [0.5, 0.5, 0.5]
+    div: [0.5, 0.5, 0.5]
+  gt:
+    sub: [0.5, 0.5, 0.5]
+    div: [0.5, 0.5, 0.5]
+
+resume: null 
