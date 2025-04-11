@@ -12,7 +12,7 @@ train_dataset:
       scale_max: 4
       augment: true
       sample_q: 2304
-  batch_size: 4  # 减小batch_size以适应较小的显存
+  batch_size: 16  # 减小batch_size以适应较小的显存
 
 val_dataset:
   dataset:
@@ -28,7 +28,7 @@ val_dataset:
       inp_size: 48
       scale_max: 4
       sample_q: 2304
-  batch_size: 4  # 减小batch_size以适应较小的显存
+  batch_size: 16  # 减小batch_size以适应较小的显存
 
 data_norm:
   inp: {sub: [0.5], div: [0.5]}

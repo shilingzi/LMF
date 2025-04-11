@@ -56,7 +56,9 @@ if __name__ == '__main__':
     # 显式指定加载到CPU，然后再迁移到适当的设备
     model_spec = torch.load(args.model, map_location='cpu')['model']
     model_spec["args"]["cmsr_spec"] = cmsr_spec
-    model = models.make(model_spec, load_sd=True).to(DEVICE)
+    model = models.make(model_spec).to(DEVICE)
+    model_sd = torch.load(args.model, map_location=DEVICE)
+    model.load_state_dict(model_sd, strict=False)
     model.eval()
     
     print(f"正在处理图像: {args.input}")
