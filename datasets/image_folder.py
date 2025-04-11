@@ -15,7 +15,7 @@ from datasets import register
 @register('image-folder')
 class ImageFolder(Dataset):
 
-    def __init__(self, root_path, split_file=None, split_key=None, first_k=None,
+    def __init__(self, root_path, split_file=None, split_key=None, first_k=None, random_k=None,
                  repeat=1, cache='none'):
         self.repeat = repeat
         self.cache = cache
@@ -25,7 +25,12 @@ class ImageFolder(Dataset):
         else:
             with open(split_file, 'r') as f:
                 filenames = json.load(f)[split_key]
-        if first_k is not None:
+        
+        # 随机选择k张图像
+        if random_k is not None:
+            import random
+            filenames = random.sample(filenames, min(random_k, len(filenames)))
+        elif first_k is not None:
             filenames = filenames[:first_k]
 
         self.files = []
