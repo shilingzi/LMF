@@ -21,9 +21,13 @@ wheels/
 *.egg
 
 # Virtual Environment
-venv/
+.env
+.venv
 env/
+venv/
 ENV/
+env.bak/
+venv.bak/
 
 # IDE
 .idea/
@@ -41,6 +45,12 @@ ehthumbs.db
 Thumbs.db
 
 # Project specific
+evaluation_results/
+save/*/
+load/*/
+*.pth
+*.pt
+*.pkl
 *.log
 *.png
 *.jpg
@@ -53,11 +63,3 @@ Thumbs.db
 !README.md
 !LICENSE
 !requirements.txt
-
-# Project specific
-evaluation_results/
-save/*/
-load/*/
-*.pth
-*.pt
-*.pkl 

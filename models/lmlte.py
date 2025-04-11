@@ -408,32 +408,28 @@ class LMLTE(nn.Module):
 
     def query_rgb_cmsr(self, coef, freq, mod, coord, cell=None):
         """
-        使用CMSR(Cross-Modulation Scale Rendering)查询RGB值
-        
-        参数:
-            coef: 系数 (B, C, h, w)
-            freq: 频率 (B, C, h, w)
-            mod: 调制 (B, C', h, w)
-            coord: 坐标 (B, H * W, 2)
-            cell: 单元区域 (B, H * W, 2)，可选参数
-            
-        返回:
-            ret: 预测的RGB值 (B, H * W, 3)
-        """
-        bs, qn = coord.shape[:2]  # 获取批次大小和查询数量
-        if self.cmsr_log:
-            self.total_qn += qn  # 累计总查询数量
+        Query RGB values of each coordinate using latent modulations and latent codes. (CMSR included)
 
-        # 计算调制均值
+        :param coef: Coefficient (B, C, h, w)
+        :param freq: Frequency (B, C, h, w)
+        :param mod: Latent modulations (B, C', h, w)
+        :param coord: Coordinates (B, H * W, 2)
+        :param cell: Cell areas (B, H * W, 2)
+        :return: Predicted RGBs (B, H * W, 3)
+        """
+
+        bs, qn = coord.shape[:2]
+        if self.cmsr_log:
+            self.total_qn += qn
+
         mod_mean = torch.mean(torch.abs(mod[:, self.mod_dim // 2:self.mod_dim, :, :]), 1, keepdim=True)
 
-        # 加载Scale2mod表
-        scale = math.sqrt(qn / coef.shape[-2] / coef.shape[-1])  # 计算当前尺度
+        # Load the Scale2mod table
+        scale = math.sqrt(qn / coef.shape[-2] / coef.shape[-1])
         for k, v in self.s2m_tables.items():
             scale2mean = self.s2m_tables[k]
             if k >= scale:
                 break
-                
         # 准备解码尺度和掩码阈值
         decode_scales, mask_thresholds = [], [0]
         for s, t in scale2mean.items():
@@ -446,38 +442,34 @@ class LMLTE(nn.Module):
             mask_thresholds.append(1)
         mask_level = len(mask_thresholds) - 1
 
-        # 初始化变量
         i_start, i_end = 0, mask_level - 1
         q_coords, masked_coords, masked_cells, mask_indices = [], [], [], []
-        
-        # 对每个掩码级别进行处理
         for i in range(mask_level):
             decode_scale = decode_scales[i]
-            # 如果解码尺度小于1，跳过解码
+            # Skip decoding if decoding scale < 1
             if decode_scale < 1:
                 i_start += 1
                 continue
 
-            # 计算当前尺度的查询大小
             qh, qw = int(coef.shape[-2] * decode_scale), int(coef.shape[-1] * decode_scale)
-            # 生成查询坐标
             q_coord = F.interpolate(self.feat_coord, size=(qh, qw), mode='bilinear',
                                     align_corners=False, antialias=False).permute(0, 2, 3, 1).view(bs, qh * qw, -1)
+            #q_coord = make_coord([qh, qw], flatten=False).cuda().view(bs, qh * qw, -1)
 
-            # 只查询那些在当前尺度下可以达到期望精度的坐标
+            # Only query coordinates where mod means indicate that they can be decoded to desired accuracy at current scale
             if i == i_end or i == i_start:
                 q_mod_mean = F.grid_sample(
                     mod_mean, q_coord.flip(-1).unsqueeze(1),
                     mode='nearest', align_corners=False)[:, :, 0, :] \
                     .permute(0, 2, 1)
                 if i == i_end:
-                    # 查询调制均值大于等于最小阈值的像素
+                    # Query pixels where mod mean >= min threshold
                     q_mask_indice = torch.where(q_mod_mean.flatten() >= mask_thresholds[i])[0]
                 else:
-                    # 查询调制均值小于等于最大阈值的像素
+                    # Query pixels where mod mean <= max threshold
                     q_mask_indice = torch.where(q_mod_mean.flatten() <= mask_thresholds[i + 1])[0]
             else:
-                # 查询调制均值在最小和最大阈值之间的像素
+                # Query pixels where min threshold <= mod mean <= max threshold
                 min_, max_ = mask_thresholds[i], mask_thresholds[i + 1]
                 mid = (max_ + min_) / 2
                 r = (max_ - min_) / 2
@@ -505,14 +497,12 @@ class LMLTE(nn.Module):
             masked_cell = masked_cell * max(decode_scale / self.max_scale, 1)
             masked_cells.append(masked_cell)
 
-        # 输出CMSR调试日志
+        # CMSR debug log
         if self.cmsr_log:
             print('valid mask: ', self.total_q / self.total_qn)
-            
-        # 批量查询RGB值
         pred = self.batched_query_rgb(coef, freq, mod, torch.cat(masked_coords, dim=1), torch.cat(masked_cells, dim=1), self.query_bsize)
 
-        # 合并不同尺度的RGB预测
+        # Merge rgb predictions at different scales
         ret = self.inp
         skip_indice_i = 0
         for i in range(i_start, mask_level):
@@ -524,13 +514,13 @@ class LMLTE(nn.Module):
             if len(q_mask_indice) <= 0:
                 continue
 
-            # 对最后一个尺度的预测进行双线性上采样
+            # Bilinear upsample predictions at last scale
             ret = F.grid_sample(
                 ret, q_coord.flip(-1).unsqueeze(1), mode='bilinear',
                 padding_mode='border', align_corners=False)[:, :, 0, :] \
                 .permute(0, 2, 1).contiguous().view(bs * qh * qw, -1)
 
-            # 合并当前尺度的预测
+            # Merge predictions at current scale
             ret[q_mask_indice, :] = pred[:, skip_indice_i:skip_indice_i + len(q_mask_indice) // bs, :].view(len(q_mask_indice), -1)
             skip_indice_i += len(q_mask_indice)
 
@@ -548,43 +538,38 @@ class LMLTE(nn.Module):
 
     def query_rgb(self, coef, freq, mod, coord, cell=None, batched=False):
         """
-        查询每个坐标的RGB值（不使用CMSR）
-        
-        参数:
-            coef: 系数 (B, C, h, w)
-            freq: 频率 (B, C, h, w)
-            mod: 潜在调制 (B, C', h, w)
-            coord: 坐标 (B, H * W, 2)
-            cell: 单元区域 (B, H * W, 2)，可选参数
-            batched: 是否由batched_query_rgb调用，默认为False
-            
-        返回:
-            ret: 预测的RGB值 (B, H * W, 3)
+        Query RGB values of each coordinate using latent modulations and latent codes. (without CMSR)
+
+        :param coef: Coefficient (B, C, h, w)
+        :param freq: Frequency (B, C, h, w)
+        :param mod: Latent modulations (B, C', h, w)
+        :param coord: Coordinates (B, H * W, 2)
+        :param cell: Cell areas (B, H * W, 2)
+        :param batched: Set to True if used by batched_query_rgb.
+        :return: Predicted RGBs (B, H * W, 3)
         """
-        # 如果没有渲染网络，直接使用双线性插值
+
         if self.imnet is None:
             return F.grid_sample(
-                self.inp, coord.flip(-1).unsqueeze(1), mode='bilinear',
-                padding_mode='border', align_corners=False)[:, :, 0, :] \
-                .permute(0, 2, 1).contiguous()
+            self.inp, coord.flip(-1).unsqueeze(1), mode='bilinear',
+            padding_mode='border', align_corners=False)[:, :, 0, :] \
+            .permute(0, 2, 1).contiguous()
 
-        bs, q = coord.shape[:2]  # 获取批次大小和查询数量
-        h, w = coef.shape[-2:]  # 获取特征图的高度和宽度
+        bs, q = coord.shape[:2]
+        h, w = coef.shape[-2:]
 
-        # 设置局部集成参数
         local_ensemble = self.local_ensemble
         if local_ensemble:
-            vx_lst = [-1, 1]  # 左、右偏移
-            vy_lst = [-1, 1]  # 上、下偏移
-            eps_shift = 1e-6  # 微小偏移量
+            vx_lst = [-1, 1]  # left, right
+            vy_lst = [-1, 1]  # top, bottom
+            eps_shift = 1e-6
         else:
             vx_lst, vy_lst, eps_shift = [0], [0], 0
 
-        # 计算场半径（全局范围：[-1, 1]）
+        # Field radius (global: [-1, 1])
         rx = 2 / h / 2
         ry = 2 / w / 2
 
-        # 在测试模式下预处理所有坐标
         if not self.training:
             coords = []
             for vx in vx_lst:
@@ -594,7 +579,7 @@ class LMLTE(nn.Module):
                     coord_[:, :, 1] += vy * ry + eps_shift
                     coords.append(coord_)
             coords = torch.cat(coords, dim=1)
-            coords.clamp_(-1 + 1e-6, 1 - 1e-6)  # 限制坐标范围
+            coords.clamp_(-1 + 1e-6, 1 - 1e-6)
 
             # 使用网格采样获取特征坐标
             q_coords = F.grid_sample(
@@ -603,19 +588,17 @@ class LMLTE(nn.Module):
                 .permute(0, 2, 1)
 
         idx = 0
-        preds = []  # 存储预测结果
-        areas = []  # 存储面积权重
+        preds = []
+        areas = []
         for vx in vx_lst:
             for vy in vy_lst:
                 if not self.training:
-                    # 在测试模式下使用预处理的坐标
                     coord_ = coords[:, idx * coord.shape[1]:(idx + 1) * coord.shape[1], :]
                     rel_coord = coord - q_coords[:, idx * coord.shape[1]:(idx + 1) * coord.shape[1], :]
                     rel_coord[:, :, 0] *= h
                     rel_coord[:, :, 1] *= w
                     idx += 1
                 else:
-                    # 在训练模式下实时计算坐标
                     coord_ = coord.clone()
                     coord_[:, :, 0] += vx * rx + eps_shift
                     coord_[:, :, 1] += vy * ry + eps_shift
@@ -628,7 +611,7 @@ class LMLTE(nn.Module):
                     rel_coord[:, :, 0] *= h
                     rel_coord[:, :, 1] *= w
 
-                # 准备频率特征
+                # Prepare frequency
                 inp = F.grid_sample(
                     freq, coord_.flip(-1).unsqueeze(1),
                     mode='nearest', align_corners=False)[:, :, 0, :] \
@@ -636,8 +619,7 @@ class LMLTE(nn.Module):
                 inp = torch.stack(torch.split(inp, 2, dim=-1), dim=-1)
                 inp = torch.mul(inp, rel_coord.unsqueeze(-1))
                 inp = torch.sum(inp, dim=-2)
-                
-                # 如果使用单元解码，添加相位信息
+
                 if self.cell_decode:
                     rel_cell = cell.clone()
                     rel_cell[:, :, 0] *= h
@@ -648,13 +630,13 @@ class LMLTE(nn.Module):
                         inp += self.phase(rel_cell.view((bs * q, -1))).view(bs, q, -1)
                 inp = torch.cat((torch.cos(np.pi * inp), torch.sin(np.pi * inp)), dim=-1)
 
-                # 系数乘以频率
+                # Coefficient x frequency
                 inp = torch.mul(F.grid_sample(
                     coef, coord_.flip(-1).unsqueeze(1),
                     mode='nearest', align_corners=False)[:, :, 0, :] \
                                 .permute(0, 2, 1), inp).contiguous().view(bs * q, -1)
 
-                # 使用潜在调制来增强渲染网络
+                # Use latent modulations to boost the render mlp
                 if self.training:
                     q_mod = F.grid_sample(
                         mod, coord_.flip(-1).unsqueeze(1),
@@ -667,7 +649,6 @@ class LMLTE(nn.Module):
                     pred0 = self.imnet(inp, only_layer0=True)
                     preds.append(pred0)
 
-                # 计算面积权重
                 area = torch.abs(rel_coord[:, :, 0] * rel_coord[:, :, 1])
                 areas.append(area + 1e-9)
 
@@ -753,34 +734,30 @@ class LMLTE(nn.Module):
 
     def query_rgb_fast(self, coef, freq, mod, coord, cell=None):
         """
-        快速查询RGB值（优化版本）
-        
-        参数:
-            coef: 系数 (B, C, h, w)
-            freq: 频率 (B, C, h, w)
-            mod: 调制 (B, C', h, w)
-            coord: 坐标 (B, H * W, 2)
-            cell: 单元区域 (B, H * W, 2)，可选参数
-            
-        返回:
-            ret: 预测的RGB值 (B, H * W, 3)
+        Query RGB values of input coordinates using latent modulations and latent codes.
+
+        :param coef: Coefficient (B, C, h, w)
+        :param freq: Frequency (B, C, h, w)
+        :param mod: modulations (B, C', h, w)
+        :param coord: coordinates (B, H * W, 2)
+        :param cell: cell areas (B, H * W, 2)
+        :return: predicted RGBs (B, H * W, 3)
         """
-        # 如果没有渲染网络，直接使用双线性插值
+
         if self.imnet is None:
             return F.grid_sample(
-                self.inp, coord.flip(-1).unsqueeze(1), mode='bilinear',
-                padding_mode='border', align_corners=False)[:, :, 0, :] \
-                .permute(0, 2, 1).contiguous()
+            self.inp, coord.flip(-1).unsqueeze(1), mode='bilinear',
+            padding_mode='border', align_corners=False)[:, :, 0, :] \
+            .permute(0, 2, 1).contiguous()
 
-        bs, q = coord.shape[:2]  # 获取批次大小和查询数量
-        ls = 4 if self.local_ensemble else 1  # 局部集成大小
+        bs, q = coord.shape[:2]
+        ls = 4 if self.local_ensemble else 1
 
-        # 预处理坐标和单元
         coords, rel_coords, rel_cells, areas = self.preprocess_coord_cell(
             mod, coord, cell, local_ensemble=self.local_ensemble)
-        le_q, nle_q = q, 0  # 局部查询和非局部查询的数量
+        le_q, nle_q = q, 0
 
-        # 准备频率特征
+        # Prepare frequency
         inp = F.grid_sample(
             freq, coords.flip(-1).unsqueeze(1),
             mode='nearest', align_corners=False)[:, :, 0, :] \
@@ -788,8 +765,7 @@ class LMLTE(nn.Module):
         inp = torch.stack(torch.split(inp, 2, dim=-1), dim=-1)
         inp = torch.mul(inp, rel_coords.unsqueeze(-1))
         inp = torch.sum(inp, dim=-2)
-        
-        # 如果使用单元解码，添加相位信息
+
         if self.cell_decode:
             if self.mod_input:
                 inp += self.imphase(rel_cells.view((bs * (ls * le_q + nle_q), -1))).view(bs, ls * le_q + nle_q, -1)
@@ -797,15 +773,14 @@ class LMLTE(nn.Module):
                 inp += self.phase(rel_cells.view((bs * (ls * le_q + nle_q), -1))).view(bs, ls * le_q + nle_q, -1)
         inp = torch.cat((torch.cos(np.pi * inp), torch.sin(np.pi * inp)), dim=-1)
 
-        # 系数乘以频率
+        # Coefficient x frequency
         inp = torch.mul(F.grid_sample(coef, coords.flip(-1).unsqueeze(1),
                                       mode='nearest', align_corners=False)[:, :, 0, :]
                         .permute(0, 2, 1), inp).contiguous().view(bs * (ls * le_q + nle_q), -1)
 
-        # 分别对每一层进行上采样，避免内存溢出
+        # Upsample modulations of each layer seperately, avoiding OOM
         preds = self.imnet(inp, mod=mod, coord=coords).view(bs, ls * le_q + nle_q, -1)
 
-        # 计算总面积并归一化权重
         tot_area = torch.stack(areas).sum(dim=0)
         if self.local_ensemble:
             t = areas[0]; areas[0] = areas[3]; areas[3] = t
@@ -814,7 +789,7 @@ class LMLTE(nn.Module):
         for pred, area in zip(preds[:, :ls * le_q, :].view(bs, ls, le_q, -1).permute(1, 0, 2, 3), areas):
             le_ret = le_ret + pred * (area / tot_area).unsqueeze(-1)
 
-        # 添加低分辨率跳跃连接
+        # LR skip
         bil = F.grid_sample(
             self.inp, coord.flip(-1).unsqueeze(1), mode='bilinear',
             padding_mode='border', align_corners=False)[:, :, 0, :] \
@@ -825,91 +800,72 @@ class LMLTE(nn.Module):
 
     def batched_query_rgb(self, coef, freq, mod, coord, cell, bsize):
         """
-        批量查询RGB值
-        
-        参数:
-            coef: 系数 (B, C, h, w)
-            freq: 频率 (B, C, h, w)
-            mod: 调制 (B, C', h, w)
-            coord: 坐标 (B, H * W, 2)
-            cell: 单元区域 (B, H * W, 2)
-            bsize: 每批次的像素数量
-            
-        返回:
-            pred: 预测的RGB值 (B, H * W, 3)
+        Query RGB values of each coordinate batch using latent modulations and latent codes.
+
+        :param coef: Coefficient (B, C, h, w)
+        :param freq: Frequency (B, C, h, w)
+        :param mod: modulations (B, C', h, w)
+        :param coord: coordinates (B, H * W, 2)
+        :param cell: cell areas (B, H * W, 2)
+        :param bsize: Number of pixels in each query
+        :return: predicted RGBs (B, H * W, 3)
         """
-        n = coord.shape[1]  # 获取总像素数
-        ql = 0  # 当前处理的起始位置
-        preds = []  # 存储每批次的预测结果
-        
-        # 分批处理所有像素
+
+        n = coord.shape[1]
+        ql = 0
+        preds = []
         while ql < n:
-            qr = min(ql + bsize, n)  # 计算当前批次的结束位置
-            # 使用快速查询函数处理当前批次
+            qr = min(ql + bsize, n)
             pred = self.query_rgb_fast(coef, freq, mod, coord[:, ql: qr, :], cell[:, ql: qr, :])
             preds.append(pred)
-            ql = qr  # 更新起始位置
-            
-        # 合并所有批次的预测结果
+            ql = qr
         pred = torch.cat(preds, dim=1)
 
         return pred
 
     def forward(self, inp, coord=None, cell=None, inp_coord=None, bsize=None):
         """
-        模型的前向传播函数
-        
-        参数:
-            inp: 输入图像 (B, h * w, 3)
-            coord: 坐标 (B, H * W, 2)
-            cell: 单元区域 (B, H * W, 2)
-            inp_coord: 输入坐标 (B, h * w, 2)
-            bsize: 每批次的像素数量
-            
-        返回:
-            out: 预测的图像 (B, H * W, 3)
+        Forward function.
+
+        :param inp: Input image (B, h * w, 3)
+        :param coord: Coordinates (B, H * W, 2)
+        :param cell: Cell areas (B, H * W, 2)
+        :param inp_coord: Input coordinates (B, h * w, 2)
+        :param bsize: Number of pixels in each query
+        :return: Predicted image (B, H * W, 3)
         """
-        # 保存输入图像
+
         self.inp = inp
-        
-        # 如果未提供坐标和单元信息，仅评估编码器效率
         if coord is None and cell is None:
+            # Evaluate the efficiency of encoder only
             feat = self.encoder(inp)
             return None
 
-        # 根据GPU内存限制调整查询像素数量
-        # 使用lmf时，可以在12GB GPU内存上同时查询4k图像
+        # Adjust the number of query pixels for different GPU memory limits.
+        # Using lmf, we can query a 4k image simultaneously with 12GB GPU memory.
         self.query_bsize = bsize if bsize is not None else int(2160 * 3840 * 0.5)
         self.query_bsize = math.ceil(coord.shape[1] / math.ceil(coord.shape[1] / self.query_bsize))
 
-        # 生成特征
         feat = self.gen_feats(inp, inp_coord)
-        
-        # 生成调制信号
         mod = self.gen_modulations(feat, cell)
-        
-        # 如果使用压缩的潜在编码，分离系数和频率
+
         if self.mod_input:
             self.coeff = mod[:, self.mod_dim:self.mod_dim + self.mod_coef_dim, :, :]
             self.freqq = mod[:, self.mod_dim + self.mod_coef_dim:, :, :]
 
-        # 根据训练/测试模式选择不同的处理方式
         if self.training:
-            # 训练模式：直接查询RGB值
             out = self.query_rgb(self.coeff, self.freqq, mod, coord, cell)
         else:
             if self.cmsr and self.updating_cmsr:
-                # 更新CMSR的Scale2mod表
+                # Update the Scale2mod Table for CMSR
                 self.update_scale2mean(self.coeff, self.freqq, mod, coord, cell)
                 return None
 
-            # 检查是否超出训练尺度范围
             out_of_distribution = coord.shape[1] > (self.max_scale ** 2) * inp.shape[-2] * inp.shape[-1]
             if self.cmsr and out_of_distribution:
-                # 对于超出训练尺度的图像，使用CMSR
+                # Only use CMSR for out-of-training scales
                 out = self.query_rgb_cmsr(self.coeff, self.freqq, mod, coord, cell)
             else:
-                # 对于正常尺度的图像，使用批量查询
                 out = self.batched_query_rgb(self.coeff, self.freqq, mod, coord, cell, self.query_bsize)
 
         return out
